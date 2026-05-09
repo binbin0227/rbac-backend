@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企业级 RBAC 权限管理系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #f3f4f6;
+        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .toast-enter { animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+        .toast-leave { animation: slideOut 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(-1rem); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-1rem); } }
+    </style>
+</head>
+
+<body class="flex h-screen overflow-hidden text-gray-800">
+
+    <!-- 左侧侧边栏 -->
+    <aside class="w-64 bg-slate-900 text-white flex-shrink-0 transition-all duration-300 shadow-xl z-20">
+        <div class="p-6 text-xl font-bold border-b border-slate-800 flex items-center tracking-wide">
+            <span class="text-blue-500 mr-3 text-2xl">🛡️</span> RBAC Admin
+        </div>
+        <nav class="mt-6">
+            <a href="#" id="nav-users" onclick="switchTab('users')"
+                class="flex items-center py-3.5 px-6 bg-blue-600/10 text-blue-400 border-r-4 border-blue-500 transition-colors">
+                <span class="mr-3 text-lg">👤</span> 用户管理
+            </a>
+            <a href="#" id="nav-roles" onclick="switchTab('roles')"
+                class="flex items-center py-3.5 px-6 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors border-r-4 border-transparent">
+                <span class="mr-3 text-lg">🔑</span> 角色管理
+            </a>
+            <a href="#" id="nav-perms" onclick="switchTab('perms')"
+                class="flex items-center py-3.5 px-6 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors border-r-4 border-transparent">
+                <span class="mr-3 text-lg">📜</span> 权限管理
+            </a>
+        </nav>
+    </aside>
+
+    <!-- 右侧主体 -->
+    <main class="flex-1 flex flex-col overflow-y-auto relative z-10">
+        <header class="bg-white shadow-sm py-4 px-8 flex justify-between items-center sticky top-0 z-10">
+            <h2 id="tab-title" class="text-xl font-semibold text-gray-800 tracking-tight">用户管理</h2>
+            <div class="flex items-center cursor-pointer hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">
+                <div class="text-right mr-3">
+                    <div class="text-sm font-medium text-gray-900">Admin_Root</div>
+                    <div class="text-xs text-gray-500">超级管理员 (ID:1)</div>
+                </div>
+                <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white font-bold shadow-sm">
+                    A
+                </div>
+            </div>
+        </header>
+
+        <div class="p-8">
+            <div class="mb-6 flex justify-between items-center">
+                <div class="relative">
+                    <!-- 🚨 修复Bug：加上了 id 和 oninput 触发实时搜索 -->
+                    <input type="text" id="search-input" oninput="renderTable()" placeholder="搜索..."
+                        class="pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-72 shadow-sm text-sm transition-all">
+                    <span class="absolute left-3 top-2.5 text-gray-400">🔍</span>
+                </div>
+                <button onclick="toggleAddModal()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg flex items-center transition-colors shadow-sm font-medium text-sm">
+                    <span class="mr-2 text-lg leading-none">+</span> 新增数据
+                </button>
+            </div>
+
+            <!-- 数据表格 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden min-h-[400px]">
+                <table class="w-full text-left border-collapse">
+                    <thead class="bg-slate-50 text-slate-600 uppercase text-xs font-semibold border-b border-gray-100">
+                        <tr id="table-head">
+                            <!-- JS 动态填充表头 -->
+                        </tr>
+                    </thead>
+                    <tbody id="table-body" class="text-gray-700 divide-y divide-gray-100 text-sm">
+                        <!-- JS 动态填充数据 -->
+                    </tbody>
+                </table>
+                <!-- 空状态 -->
+                <div id="empty-state" class="hidden text-center py-20 text-gray-400">
+                    <div class="text-5xl mb-4 opacity-50">📭</div>
+                    <p class="text-base font-medium">找不到对应数据</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 🌟 Toast 提示 -->
+    <div id="toast-container" class="fixed top-6 left-1/2 transform -translate-x-1/2 z-50 flex flex-col items-center space-y-3 pointer-events-none"></div>
+
+    <!-- 🛑 新增数据弹窗 -->
+    <div id="add-modal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity">
+        <div class="bg-white rounded-2xl p-8 w-96 shadow-2xl">
+            <h3 id="modal-title" class="text-xl font-bold text-gray-800 mb-6">新增项</h3>
+            <form id="add-form" onsubmit="event.preventDefault(); saveData();">
+                <!-- 通用名称 -->
+                <div class="mb-4">
+                    <label class="block text-gray-700 mb-2 font-medium text-sm">名称 <span class="text-red-500">*</span></label>
+                    <input type="text" id="input-name" required class="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                </div>
+                <!-- 角色专属字段 -->
+                <div id="field-desc" class="mb-4 hidden">
+                    <label class="block text-gray-700 mb-2 font-medium text-sm">描述</label>
+                    <input type="text" id="input-desc" class="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                </div>
+                <!-- 权限专属字段 -->
+                <div id="field-path" class="mb-4 hidden">
+                    <label class="block text-gray-700 mb-2 font-medium text-sm">接口路径 (Path)</label>
+                    <input type="text" id="input-path" placeholder="例: /api/v1/users" class="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                </div>
+                <div id="field-method" class="mb-6 hidden">
+                    <label class="block text-gray-700 mb-2 font-medium text-sm">请求方法 (Method)</label>
+                    <select id="input-method" class="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white">
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="DELETE">DELETE</option>
+                    </select>
+                </div>
+
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="toggleAddModal()" class="px-5 py-2.5 text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors font-medium text-sm">取消</button>
+                    <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm font-medium text-sm">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 🔗 分配关联弹窗 -->
+    <div id="assign-modal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-white rounded-2xl p-8 w-[400px] shadow-2xl">
+            <h3 id="assign-modal-title" class="text-xl font-bold text-gray-800 mb-2">分配配置</h3>
+            <p id="assign-modal-subtitle" class="text-sm text-gray-500 mb-6">请勾选需要绑定的项目</p>
+
+            <div id="assign-checkbox-list" class="max-h-60 overflow-y-auto space-y-2 mb-6 border border-gray-100 p-3 rounded-lg bg-gray-50">
+                <!-- 动态复选框 -->
+            </div>
+
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeAssignModal()" class="px-5 py-2.5 text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors font-medium text-sm">取消</button>
+                <button onclick="submitAssign()" class="px-5 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm font-medium text-sm">确认分配</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ⚠️ 删除确认弹窗 -->
+    <div id="delete-modal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-white rounded-2xl p-8 w-96 shadow-2xl">
+            <h3 class="text-xl font-bold text-gray-800 text-center mb-6">确认删除数据？</h3>
+            <div class="flex justify-center space-x-4">
+                <button onclick="closeDeleteModal()" class="px-6 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors rounded-lg font-medium text-sm">取消</button>
+                <button id="confirm-delete-btn" onclick="performDelete()" class="px-6 py-2 bg-red-600 hover:bg-red-700 transition-colors text-white rounded-lg font-medium text-sm">确认删除</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "http://127.0.0.1:8080/api/v1";
+        let tableData = [];
+        let currentTab = 'users';
+        let itemToDeleteId = null;
+
+        let assignType = ''; 
+        let assignTargetId = null;
+
+        const getHeaders = () => ({
+            'Content-Type': 'application/json',
+            'X-User-Id': '1' // 模拟超级管理员登录
+        });
+
+        function escapeHTML(str) { return str ? String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[m]) : ''; }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bg = type === 'success' ? 'bg-emerald-500' : 'bg-red-500';
+            toast.className = `${bg} text-white px-6 py-3 rounded-full shadow-lg flex items-center space-x-2 toast-enter text-sm font-medium`;
+            toast.innerHTML = `<span>${escapeHTML(message)}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => { toast.classList.replace('toast-enter', 'toast-leave'); setTimeout(() => toast.remove(), 300); }, 3000);
+        }
+
+        // ================= 数据加载与渲染 =================
+        async function loadData() {
+            try {
+                const res = await fetch(`${API_BASE}/${currentTab}?_t=${Date.now()}`, {
+                    headers: getHeaders(),
+                    cache: 'no-store' 
+                });
+                
+                if (res.ok) {
+                    tableData = await res.json() || [];
+                    renderTable();
+                } else { 
+                    const errData = await res.json();
+                    showToast(errData.error || "请求被拦截或失败", "error"); 
+                }
+            } catch (e) {
+                tableData = []; renderTable();
+                showToast("无法连接到后端服务器", "error");
+            }
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tab-title').innerText = { users: '用户管理', roles: '角色管理', perms: '权限管理' }[tab];
+            
+            // 🚨 切换侧边栏时，清空上一个标签页的搜索残留内容
+            document.getElementById('search-input').value = '';
+
+            ['users', 'roles', 'perms'].forEach(t => {
+                document.getElementById('nav-' + t).className = t === tab
+                    ? "flex items-center py-3.5 px-6 bg-blue-600/10 text-blue-500 border-r-4 border-blue-500 transition-colors font-medium"
+                    : "flex items-center py-3.5 px-6 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors border-r-4 border-transparent";
+            });
+            loadData();
+        }
+
+        function renderTable() {
+            const head = document.getElementById('table-head');
+            const body = document.getElementById('table-body');
+            head.innerHTML = ''; body.innerHTML = '';
+
+            // 🚨 核心逻辑：获取实时搜索内容进行多维度数据过滤
+            const searchInput = document.getElementById('search-input');
+            const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
+
+            const filteredData = tableData.filter(item => {
+                if (!searchTerm) return true; // 为空时直接返回全部
+                
+                const idStr = String(item.ID);
+                const nameStr = (item.name || '').toLowerCase();
+                
+                if (currentTab === 'users') {
+                    // 用户模块搜索：ID、姓名、持有的角色名
+                    const rolesStr = (item.roles || []).map(r => r.name).join(' ').toLowerCase();
+                    return idStr.includes(searchTerm) || nameStr.includes(searchTerm) || rolesStr.includes(searchTerm);
+                } else if (currentTab === 'roles') {
+                    // 角色模块搜索：ID、名称、描述、持有的权限名
+                    const descStr = (item.description || '').toLowerCase();
+                    const permsStr = (item.permissions || []).map(p => p.name).join(' ').toLowerCase();
+                    return idStr.includes(searchTerm) || nameStr.includes(searchTerm) || descStr.includes(searchTerm) || permsStr.includes(searchTerm);
+                } else if (currentTab === 'perms') {
+                    // 权限模块搜索：ID、名称、路径、方法
+                    const pathStr = (item.path || '').toLowerCase();
+                    const methodStr = (item.method || '').toLowerCase();
+                    return idStr.includes(searchTerm) || nameStr.includes(searchTerm) || pathStr.includes(searchTerm) || methodStr.includes(searchTerm);
+                }
+                return true;
+            });
+
+            // 检查过滤后是否有数据
+            document.getElementById('empty-state').classList.toggle('hidden', filteredData.length > 0);
+            if (filteredData.length === 0) return;
+
+            const headers = {
+                users: ['ID', '用户名', '拥有的角色', '操作'],
+                roles: ['ID', '角色名称', '角色描述', '包含的权限', '操作'],
+                perms: ['ID', '权限名称', '接口路径 (Path)', '请求方法 (Method)', '操作']
+            }[currentTab];
+
+            headers.forEach(h => { head.innerHTML += `<th class="px-6 py-4">${h}</th>`; });
+
+            // 🚨 渲染过滤后的数据 filteredData，而不是最原始的 tableData
+            filteredData.forEach(item => {
+                const id = item.ID;
+                const name = item.name || '';
+                let tr = document.createElement('tr');
+                tr.className = "hover:bg-blue-50/50 transition-colors";
+
+                let content = `<td class="px-6 py-4 font-mono text-gray-400">${id}</td>`;
+                content += `<td class="px-6 py-4 font-bold text-gray-800">${escapeHTML(name)}</td>`;
+
+                if (currentTab === 'users') {
+                    const rolesHtml = (item.roles && item.roles.length > 0)
+                        ? item.roles.map(r => `<span class="bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs mr-1">${escapeHTML(r.name)}</span>`).join('')
+                        : `<span class="text-gray-400 text-xs">暂无角色</span>`;
+                    content += `<td class="px-6 py-4">${rolesHtml}</td>`;
+                    content += `<td class="px-6 py-4">
+                        <button onclick="openAssignModal('role', ${id}, '${name}')" class="text-indigo-600 hover:underline font-medium mr-4">分配角色</button>
+                        <button onclick="openDeleteModal(${id})" class="text-red-500 hover:underline font-medium">删除</button>
+                    </td>`;
+                }
+                else if (currentTab === 'roles') {
+                    content += `<td class="px-6 py-4 text-gray-500">${escapeHTML(item.description)}</td>`;
+                    const permsHtml = (item.permissions && item.permissions.length > 0)
+                        ? item.permissions.map(p => `<span class="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs mr-1">${escapeHTML(p.name)}</span>`).join('')
+                        : `<span class="text-gray-400 text-xs">暂无权限</span>`;
+                    content += `<td class="px-6 py-4">${permsHtml}</td>`;
+                    content += `<td class="px-6 py-4">
+                        <button onclick="openAssignModal('perm', ${id}, '${name}')" class="text-emerald-600 hover:underline font-medium mr-4">分配权限</button>
+                        <button onclick="openDeleteModal(${id})" class="text-red-500 hover:underline font-medium">删除</button>
+                    </td>`;
+                }
+                else if (currentTab === 'perms') {
+                    const methodColors = { 'GET': 'text-emerald-600 bg-emerald-50', 'POST': 'text-blue-600 bg-blue-50', 'DELETE': 'text-red-600 bg-red-50', 'PUT': 'text-orange-600 bg-orange-50' };
+                    const mColor = methodColors[item.method] || 'text-gray-600 bg-gray-50';
+                    content += `
+                        <td class="px-6 py-4 font-mono text-gray-500">${escapeHTML(item.path)}</td>
+                        <td class="px-6 py-4"><span class="${mColor} border px-2 py-1 rounded text-xs font-bold">${escapeHTML(item.method)}</span></td>
+                        <td class="px-6 py-4"><button onclick="openDeleteModal(${id})" class="text-red-500 hover:underline font-medium">删除</button></td>
+                    `;
+                }
+                tr.innerHTML = content;
+                body.appendChild(tr);
+            });
+        }
+
+        // ================= CRUD 表单操作 =================
+        function toggleAddModal() {
+            const modal = document.getElementById('add-modal');
+            if (modal.classList.contains('hidden')) {
+                document.getElementById('add-form').reset();
+                document.getElementById('modal-title').innerText = { users: '新增用户', roles: '新增角色', perms: '新增权限' }[currentTab];
+                
+                document.getElementById('field-desc').classList.toggle('hidden', currentTab !== 'roles');
+                document.getElementById('field-path').classList.toggle('hidden', currentTab !== 'perms');
+                document.getElementById('field-method').classList.toggle('hidden', currentTab !== 'perms');
+            }
+            modal.classList.toggle('hidden');
+        }
+
+        async function saveData() {
+            const payload = { name: document.getElementById('input-name').value.trim() };
+            if (currentTab === 'roles') payload.description = document.getElementById('input-desc').value.trim();
+            if (currentTab === 'perms') {
+                payload.path = document.getElementById('input-path').value.trim();
+                payload.method = document.getElementById('input-method').value;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/${currentTab}`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) { 
+                    toggleAddModal(); showToast("添加成功"); loadData(); 
+                } else {
+                    const errData = await res.json();
+                    showToast(errData.error || "保存失败", "error"); 
+                }
+            } catch (e) { showToast("请求发生异常", "error"); }
+        }
+
+        function openDeleteModal(id) { itemToDeleteId = id; document.getElementById('delete-modal').classList.remove('hidden'); }
+        function closeDeleteModal() { itemToDeleteId = null; document.getElementById('delete-modal').classList.add('hidden'); }
+
+        async function performDelete() {
+            const targetId = itemToDeleteId; 
+            closeDeleteModal(); 
+            
+            try {
+                const res = await fetch(`${API_BASE}/${currentTab}/${targetId}`, { 
+                    method: 'DELETE',
+                    headers: getHeaders()
+                });
+                if (res.ok) { 
+                    showToast("删除成功"); loadData(); 
+                } else {
+                    const errData = await res.json();
+                    showToast(errData.error || "删除失败", "error"); 
+                }
+            } catch (e) { showToast("请求发生异常", "error"); }
+        }
+
+        // ================= 核心：RBAC 关联分配逻辑 =================
+        async function openAssignModal(type, targetId, targetName) {
+            assignType = type;
+            assignTargetId = targetId;
+
+            document.getElementById('assign-modal-title').innerText = type === 'role' ? `分配角色给 [${targetName}]` : `分配权限给角色 [${targetName}]`;
+
+            try {
+                const listRes = await fetch(`${API_BASE}/${type === 'role' ? 'roles' : 'perms'}`, {
+                    headers: getHeaders()
+                });
+                const allItems = await listRes.json();
+
+                const currentData = tableData.find(item => item.ID === targetId);
+                let currentIds = [];
+                if (type === 'role' && currentData.roles) currentIds = currentData.roles.map(r => r.ID);
+                if (type === 'perm' && currentData.permissions) currentIds = currentData.permissions.map(p => p.ID);
+
+                let html = '';
+                if (allItems.length === 0) html = '<div class="text-sm text-gray-400">无可分配的选项，请先去创建。</div>';
+
+                allItems.forEach(item => {
+                    const isChecked = currentIds.includes(item.ID) ? 'checked' : '';
+                    html += `
+                        <label class="flex items-center p-2 hover:bg-gray-100 rounded cursor-pointer transition">
+                            <input type="checkbox" value="${item.ID}" class="assign-checkbox w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500" ${isChecked}>
+                            <span class="ml-3 text-sm text-gray-700 font-medium">${escapeHTML(item.name)}</span>
+                            ${item.path ? `<span class="ml-2 text-xs text-gray-400">(${item.method} ${item.path})</span>` : ''}
+                        </label>`;
+                });
+                document.getElementById('assign-checkbox-list').innerHTML = html;
+                document.getElementById('assign-modal').classList.remove('hidden');
+
+            } catch (e) { showToast("拉取数据失败", "error"); }
+        }
+
+        function closeAssignModal() { document.getElementById('assign-modal').classList.add('hidden'); }
+
+        async function submitAssign() {
+            const checkboxes = document.querySelectorAll('.assign-checkbox:checked');
+            const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+
+            const url = assignType === 'role'
+                ? `${API_BASE}/users/${assignTargetId}/roles`
+                : `${API_BASE}/roles/${assignTargetId}/perms`;
+
+            const payload = assignType === 'role'
+                ? { role_ids: selectedIds }
+                : { perm_ids: selectedIds };
+
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    closeAssignModal();
+                    showToast("分配成功！");
+                    loadData(); 
+                } else { 
+                    const errData = await res.json();
+                    showToast(errData.error || "分配失败", "error"); 
+                }
+            } catch (e) { showToast("请求后端失败", "error"); }
+        }
+
+        // 初始化加载数据
+        loadData();
+    </script>
+</body>
+
+</html>
