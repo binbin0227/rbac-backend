@@ -1,0 +1,15 @@
+# 忽略编译后的可执行文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 忽略 Go 的测试和缓存文件
+*.test
+*.out
+.idea/
+.vscode/
+
+# 忽略临时文件
+*.log
