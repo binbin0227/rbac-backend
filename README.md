@@ -12,70 +12,62 @@
 
 ## **🗄️ 核心数据架构 (ER 模型)**
 
-系统采用经典的多对多（Many-to-Many）关联模型，由 GORM 自动维护底层的隐藏关联外键表。
+系统采用经典的多对多（Many-to-Many）关联模型，由 GORM 自动维护底层的隐藏关联外键表。以下是纯文本结构的 ER 图：
 
-erDiagram  
-    USER {  
-        uint ID PK "主键"  
-        string Name "用户名"  
-    }  
-      
-    ROLE {  
-        uint ID PK "主键"  
-        string Name "角色名"  
-        string Description "角色描述"  
-    }  
-      
-    PERMISSION {  
-        uint ID PK "主键"  
-        string Name "权限名称"  
-        string Path "接口路径"  
-        string Method "请求方法"  
-    }
+  \+--------------+               \+--------------+               \+----------------+  
+  |    USER      |               |    ROLE      |               |   PERMISSION   |  
+  \+--------------+               \+--------------+               \+----------------+  
+  | PK: ID       |     m:m       | PK: ID       |     m:m       | PK: ID         |  
+  |     Name     | \<===========\> |     Name     | \<===========\> |     Name       |  
+  |              |    (属于)     | Description  |    (拥有)     |     Path       |  
+  |              |               |              |               |     Method     |  
+  \+--------------+               \+--------------+               \+----------------+  
+         |                              |                               |  
+  \[底层关联表: user\_roles\]        \[底层关联表: role\_permissions\]      (定义接口与动作)
 
-    USER }|--|{ ROLE : "拥有角色 (user\_roles)"  
-    ROLE }|--|{ PERMISSION : "绑定权限 (role\_permissions)"
+## **⚙️ 系统启动与请求流转生命周期**
 
-## **⚙️ 系统启动与请求流转生命周期 (时序图)**
+系统从底层启动到响应前端请求，经过了严密的初始化与层层拦截。核心业务流转如下：
 
-相比于传统的流程图，本系统采用严格的中间件洋葱模型拦截。以下是服务启动及 API 请求流转的完整生命周期：
-
-sequenceDiagram  
-    autonumber  
-    actor Client as 前端 / 客户端  
-    participant Gin as Gin 路由引擎  
-    participant CORS as CORS 跨域中间件  
-    participant Auth as RBAC 鉴权拦截器  
-    participant Ctrl as 业务逻辑层 (Controller)  
-    participant DB as MySQL 数据库
-
-    Note over Gin, DB: 【第一阶段】系统启动与数据预热  
-    Gin-\>\>DB: 连接数据库 & AutoMigrate 自动建表  
-    DB--\>\>Gin: 表结构同步完成  
-    Gin-\>\>DB: 检查 users 表是否为空？  
-    alt 数据库为空 (首次启动)  
-        Gin-\>\>DB: 植入上帝角色 (Admin) 与基础 API 权限 (Seeder)  
-    end  
-    Gin-\>\>Gin: 挂载全局中间件与 API 路由，监听 :8080
-
-    Note over Client, DB: 【第二阶段】API 接口请求流转 (以删除用户为例)  
-    Client-\>\>Gin: 发起请求 (DELETE /api/v1/users/2)\<br\>携带 X-User-Id: 1  
-      
-    Gin-\>\>CORS: 1\. 跨域安全检查  
-    CORS--\>\>Gin: 允许放行  
-      
-    Gin-\>\>Auth: 2\. 身份与 RBAC 权限校验  
-    Auth-\>\>DB: 级联查询该请求者的 \[用户 \-\> 角色 \-\> 权限\] 树  
-    DB--\>\>Auth: 返回当前用户持有的所有权限钥匙  
-      
-    alt 权限不足 / 未传凭证  
-        Auth--\>\>Client: 拦截请求 (HTTP 403 / 401 拒绝访问)  
-    else 权限校验通过 (拥有 DELETE /api/v1/users/:id 钥匙)  
-        Auth-\>\>Ctrl: 3\. 安检通过，进入具体业务逻辑  
-        Ctrl-\>\>DB: 执行对应记录的软删除操作  
-        DB--\>\>Ctrl: 返回执行结果  
-        Ctrl--\>\>Client: 响应操作成功 (HTTP 200 OK)  
-    end
+\[ 🚀 启动 main.go \]  
+       |  
+       v  
+\+--------------------+  
+| 1\. 连接 MySQL 数据库 |  
+\+--------------------+  
+       |  
+       v  
+\+--------------------+  
+| 2\. GORM 自动建表    | (AutoMigrate: 自动同步 User, Role, Permission 实体及中间表)  
+\+--------------------+  
+       |  
+       v  
+\+--------------------+  
+| 3\. 检查库是否为空？  |  
+\+--------------------+  
+       |  
+       \+--- (是) \---\> \[ 创世种子脚本 \] \---\> 自动生成：11个基础权限 \-\> 超级管理员角色 \-\> 绑定权限 \-\> 上帝用户 Admin\_Root  
+       |  
+       \+--- (否) \---\> \[ 跳过数据初始化 \]  
+       |  
+       v  
+\+--------------------+  
+| 4\. 初始化路由配置    | (SetupRouter)  
+\+--------------------+  
+       |  
+       |----\> \[1\] 加载 Cors 中间件        (允许前端跨域及 X-User-Id 请求头)  
+       |  
+       |----\> \[2\] 加载 RBACGuard 中间件   (拦截查工牌 \-\> 核对 URL/Method \-\> 级联查库验证权限 \-\> 放行/拒绝)  
+       |  
+       |----\> \[3\] 注册 Controller 接口   (挂载对应的处理函数，准备接收业务参数)  
+       |  
+       v  
+\+--------------------+  
+| 5\. 启动 HTTP 服务   | (监听 :8080 端口)  
+\+--------------------+  
+       |  
+       v  
+\[ ⚡ 处理三者的 GET, POST, DELETE 请求，及核心的分配角色/分配权限请求 \]
 
 ## **🚀 快速启动指南**
 
