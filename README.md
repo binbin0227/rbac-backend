@@ -1,114 +1,100 @@
-# **🛡️ Enterprise RBAC API (企业级权限控制引擎)**
+# **🚀 全球跨境电商中后台系统 \- 企业级 RBAC 权限引擎**
 
-本项目是一个基于 Go 语言构建的纯后端企业级 RBAC（Role-Based Access Control）权限管理引擎。从零设计了“用户-角色-权限”的多对多关联模型，并通过自定义 Gin 中间件实现了高安全性的细粒度接口级鉴权。
+(Global E-commerce Admin & RBAC Engine)
 
-## **✨ 核心特性**
+基于 **Golang \+ Gin \+ GORM \+ Redis \+ MySQL** 构建的企业级中后台权限管理系统。本项目以真实的“跨境电商”业务为沙盘，落地了极其严密的 **RBAC（Role-Based Access Control）** 权限模型，并针对高并发场景下的接口鉴权进行了深度性能优化。
 
-* **标准 RBAC 架构**: 彻底抛弃低效的单表权限字段，采用 users、roles、permissions 加上中间表的标准多对多（Many-to-Many）关联模型。  
-* **接口级动态鉴权 (Auth Middleware)**: 独立编写 Gin 拦截器，基于每一次请求的 URL Path 和 HTTP Method 进行精准权限碰撞，坚决拦截越权访问 (返回 HTTP 403 Forbidden)。  
-* **深度级联查询**: 充分利用 GORM 的 Preload 嵌套预加载技术，优雅解决复杂的 N+1 查询问题，一次性提取“用户 \-\> 角色 \-\> 权限”的完整权限关系树。  
-* **数据库自动播种 (Database Seeder)**: 拥有服务启动自检能力。当检测到空数据库时，全自动植入完整的 API 路由权限与超级管理员 (Admin\_Root) 账号，实现“开箱即用”。  
-* **CORS 跨域支持**: 完善的跨域资源共享配置，支持无缝对接 Vue、React 等现代前端单页应用。
+## **🛠️ 技术栈 (Tech Stack)**
 
-## **🗄️ 核心数据架构 (ER 模型)**
+* **核心框架**: Golang, Gin (RESTful API 设计)  
+* **持久层**: MySQL 8.0, GORM (优雅处理多对多关联与预加载)  
+* **缓存与高并发**: Redis (Set 集合实现 O(1) 毫秒级权限碰撞)  
+* **安全机制**: UUID Token, 动态路由拦截 (c.FullPath())
 
-系统采用经典的多对多（Many-to-Many）关联模型，由 GORM 自动维护底层的隐藏关联外键表。以下是纯文本结构的 ER 图：
+## **🔥 核心技术亮点 (Technical Highlights)**
 
-  \+--------------+               \+--------------+               \+----------------+  
-  |    USER      |               |    ROLE      |               |   PERMISSION   |  
-  \+--------------+               \+--------------+               \+----------------+  
-  | PK: ID       |     m:m       | PK: ID       |     m:m       | PK: ID         |  
-  |     Name     | \<===========\> |     Name     | \<===========\> |     Name       |  
-  |              |    (属于)     | Description  |    (拥有)     |     Path       |  
-  |              |               |              |               |     Method     |  
-  \+--------------+               \+--------------+               \+----------------+  
-         |                              |                               |  
-  \[底层关联表: user\_roles\]        \[底层关联表: role\_permissions\]      (定义接口与动作)
+### **1\. 毫秒级防盗门：基于 Redis Set 的高并发鉴权**
 
-## **⚙️ 系统启动与请求流转生命周期**
+传统的 RBAC 每次接口请求都需要经历 User \-\> Role \-\> Permission 的多表联查，极易导致 MySQL 磁盘 I/O 成为系统瓶颈。
 
-系统从底层启动到响应前端请求，经过了严密的初始化与层层拦截。核心业务流转如下：
+* **破局方案**：在用户登录 (Login) 瞬间，利用 GORM Preload 将树形权限网打平，拼接成 Method:Path（如 DELETE:/api/v1/products/:id）的扁平化结构，并将其全量推入 Redis 的 **Set 集合** 中。  
+* **极致性能**：在中间件 RBACGuard 中，使用 Redis 的 SIsMember 命令进行 O(1) 复杂度的权限碰撞，将接口的鉴权耗时压榨至 **1 毫秒内**。
 
-\[ 🚀 启动 main.go \]  
-       |  
-       v  
-\+--------------------+  
-| 1\. 连接 MySQL 数据库 |  
-\+--------------------+  
-       |  
-       v  
-\+--------------------+  
-| 2\. GORM 自动建表    | (AutoMigrate: 自动同步 User, Role, Permission 实体及中间表)  
-\+--------------------+  
-       |  
-       v  
-\+--------------------+  
-| 3\. 检查库是否为空？  |  
-\+--------------------+  
-       |  
-       \+--- (是) \---\> \[ 创世种子脚本 \] \---\> 自动生成：11个基础权限 \-\> 超级管理员角色 \-\> 绑定权限 \-\> 上帝用户 Admin\_Root  
-       |  
-       \+--- (否) \---\> \[ 跳过数据初始化 \]  
-       |  
-       v  
-\+--------------------+  
-| 4\. 初始化路由配置    | (SetupRouter)  
-\+--------------------+  
-       |  
-       |----\> \[1\] 加载 Cors 中间件        (允许前端跨域及 X-User-Id 请求头)  
-       |  
-       |----\> \[2\] 加载 RBACGuard 中间件   (拦截查工牌 \-\> 核对 URL/Method \-\> 级联查库验证权限 \-\> 放行/拒绝)  
-       |  
-       |----\> \[3\] 注册 Controller 接口   (挂载对应的处理函数，准备接收业务参数)  
-       |  
-       v  
-\+--------------------+  
-| 5\. 启动 HTTP 服务   | (监听 :8080 端口)  
-\+--------------------+  
-       |  
-       v  
-\[ ⚡ 处理三者的 GET, POST, DELETE 请求，及核心的分配角色/分配权限请求 \]
+### **2\. 精准打击：RESTful 动态路由拦截**
 
-## **🚀 快速启动指南**
+针对带有动态参数的 URL（例如前端请求 DELETE /api/v1/products/99），普通中间件无法直接与数据库中存放的模板路径进行比对。
+
+* **优雅实现**：巧妙利用 Gin 框架底层的 c.FullPath() 方法，在中间件层面精准还原动态路由模板（识别为 /api/v1/products/:id），实现对 RESTful API 的无死角管控。
+
+### **3\. 企业级数据沙盘：创世种子脚本 (Seed Data)**
+
+内置 main.go 创世脚本，项目首次启动时检测空库状态，自动利用 GORM 的 Association().Append() 建立复杂的“多对多”关联，瞬间生成高度仿真的电商业务矩阵。
+
+## **🏢 业务矩阵设计 (Business Matrix)**
+
+系统内置了跨境电商公司中 4 个极其典型的职场角色，严格遵循**最小权限原则**：
+
+| **员工账号** | **佩戴工牌 (Role)** | **拥有权限 (Permissions)** | **业务禁区** |
+
+| **Admin\_Root** | 超级管理员 | 拥有系统全部 10 把钥匙 | 无 |
+
+| **Ops\_Alice** | 商品运营总监 | 只能看/增/删 **商品** (/products) | 绝对碰不到订单和财务报表 |
+
+| **CS\_Bob** | 一线客服专员 | 只能查看/修改 **订单** (/orders) | 绝对无权下架商品 |
+
+| **Finance\_Charlie** | 财务审计员 | 只能查看报表和审核 **退款** (/refunds) | 碰不到业务线数据 |
+
+## **🚀 快速启动 (Quick Start)**
 
 ### **1\. 环境准备**
 
-* Go 1.20 或更高版本  
-* MySQL 8.0 数据库
+请确保本地已安装并运行：
 
-### **2\. 克隆项目**
+* **MySQL** (默认端口: 3306\)  
+* **Redis** (默认端口: 6379\)
 
-git clone \[https://github.com/binbin0227/rbac-backend.git\](https://github.com/binbin0227/rbac-backend.git)  
-cd rbac-backend
+### **2\. 修改配置 (可选)**
 
-### **3\. 配置数据库**
+检查 main.go 中的数据库和 Redis 连接字符串，确保密码与您本地一致。
 
-打开 main.go，根据你的本地环境修改 MySQL 的 DSN 连接字符串：
+默认 MySQL 账号为 root:123456，数据库名为 rbac\_db。
 
-dsn := "root:\*\*\*\*\*\*@tcp(127.0.0.1:3306)/rbac\_db?charset=utf8mb4\&parseTime=True\&loc=Local"
-
-*(注意：请确保 rbac\_db 数据库已提前在 MySQL 中创建，并将 \*\*\*\*\*\* 替换为真实的数据库密码)*
-
-### **4\. 运行服务**
+### **3\. 运行服务**
 
 \# 下载依赖  
 go mod tidy
 
-\# 启动服务  
+\# 启动服务（首次启动会自动建表并注入电商测试数据）  
 go run main.go
 
-*注：首次启动时，终端会打印 🌱 检测到空数据库，正在植入上帝角色...，系统会自动完成建表与权限数据的播种。*
+启动成功后，终端将输出：🌱 检测到空数据库为空，正在植入电商业务预设数据...
 
-## **📝 核心 RESTful API 概览**
+## **🧪 接口调用演示 (API Demo)**
 
-所有处于 /api/v1 下的接口均受到 RBACGuard 中间件保护。测试接口时，请务必在 HTTP Header 中携带身份凭证（目前演示版本为 X-User-Id: 1）。
+### **Step 1: 登录获取 Token**
 
-| 请求方法 | 接口路径 | 业务描述 | 权限拦截 |
-| :---- | :---- | :---- | :---- |
-| GET | /api/v1/users | 获取所有用户及级联角色 | 🔒 是 |
-| POST | /api/v1/roles | 创建新角色 | 🔒 是 |
-| DELETE | /api/v1/perms/:id | 删除权限 | 🔒 是 |
-| POST | /api/v1/users/:id/roles | **为用户分配角色 (GORM 覆盖绑定)** | 🔒 是 |
-| POST | /api/v1/roles/:id/perms | **为角色分配权限 (GORM 覆盖绑定)** | 🔒 是 |
+使用客服专员账号登录：
 
-*Built with ❤️ for backend architecture study & practice.*
+* **POST** http://127.0.0.1:8080/api/v1/login  
+* **Body (JSON)**: {"name": "CS\_Bob", "password": "123"}  
+* **Response**: 记录返回的 token 值。
+
+### **Step 2: 测试合法业务（查订单）**
+
+* **GET** http://127.0.0.1:8080/api/v1/orders  
+* **Headers**: Authorization: \<刚才获取的 Token\>  
+* **Response**: {"msg": "成功获取订单列表：待发货 50 单"} (安检通过✅)
+
+### **Step 3: 测试越权拦截（企图下架商品）**
+
+* **DELETE** http://127.0.0.1:8080/api/v1/products/1  
+* **Headers**: Authorization: \<刚才获取的 Token\>  
+* **Response**: **403 Forbidden** {"error": "没有 \[DELETE:/api/v1/products/:id\] 的权限"} (安检拦截⛔)
+
+## **🔐 生产环境演进方向 (Future Work)**
+
+本项目作为底层鉴权基建的展示，后续推向生产环境（Production）时，将增加以下模块：
+
+1. **密码安全升级**: 引入 golang.org/x/crypto/bcrypt，告别明文密码，使用 Hash & Salt 加盐哈希存储，应对脱库风险。  
+2. **主动踢出机制**: 完善 Token 黑名单机制，实现对违规账号的一键强踢。  
+3. **操作审计日志**: 增加 AopLog 中间件，将所有敏感修改（如 DELETE / POST）落库或推入消息队列，实现完整的操作追溯。

@@ -1,0 +1,606 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gitattributes
+.gitignore
+.repomixignore
+controllers/auth.go
+controllers/permission.go
+controllers/role.go
+controllers/user.go
+go.mod
+main.go
+middleware/auth.go
+models/models.go
+router/router.go
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".repomixignore">
+index.html
+*.md
+</file>
+
+<file path="controllers/auth.go">
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"rbac-backend/models"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+)
+
+var ctx = context.Background()
+
+type LoginRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+func Login(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+
+	// 1. 查询账号密码是否正确
+	var user models.User
+	if err := models.DB.Preload("Roles.Permissions").Where("name = ? AND password = ?", req.Name, req.Password).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
+		return
+	}
+
+	// 2. 账号密码正确则生成随机Token
+	token := uuid.New().String()
+
+	// 3. Redis: 把 Token 和 UserID 存起来 (有效期 2 小时)
+	models.RDB.Set(ctx, token, user.ID, 2*time.Hour)
+
+	// 4. Redis: 把他的所有“权限钥匙”存进 Redis 集合 里
+	permKey := fmt.Sprintf("user_perms:%d", user.ID) // 例如 user_perms:1
+	models.RDB.Del(ctx, permKey)                     // 先清空旧的缓存
+	for _, role := range user.Roles {
+		for _, perm := range role.Permissions {
+			// 把 "GET:/api/v1/users" 这种格式存进去
+			permStr := perm.Method + ":" + perm.Path
+			models.RDB.SAdd(ctx, permKey, permStr)
+		}
+	}
+	models.RDB.Expire(ctx, permKey, 2*time.Hour) // 权限集合有效期 2 小时
+	c.JSON(http.StatusOK, gin.H{
+		"message": "登录成功",
+		"token":   token,
+	})
+}
+</file>
+
+<file path=".gitattributes">
+*.html linguist-vendored
+</file>
+
+<file path=".gitignore">
+# 忽略编译后的可执行文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 忽略 Go 的测试和缓存文件
+*.test
+*.out
+.idea/
+.vscode/
+
+# 忽略临时文件
+*.log
+</file>
+
+<file path="controllers/permission.go">
+package controllers
+
+import (
+	"net/http"
+	"rbac-backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+func GetPermissions(c *gin.Context) {
+	var permissions []models.Permission
+	models.DB.Find(&permissions)
+	c.JSON(http.StatusOK, permissions)
+}
+
+func CreatePermission(c *gin.Context) {
+	var permission models.Permission
+	err := c.ShouldBindJSON(&permission)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "解析JSON失败"})
+		return
+	}
+	models.DB.Create(&permission)
+	c.JSON(http.StatusOK, permission)
+}
+func DeletePermission(c *gin.Context) {
+	id := c.Param("id")
+	models.DB.Where("id = ?", id).Delete(&models.Permission{})
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+</file>
+
+<file path="controllers/role.go">
+package controllers
+
+import (
+	"net/http"
+	"rbac-backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+type AssignPermRequest struct {
+	PermIDs []uint `json:"perm_ids"`
+}
+
+func GetRoles(c *gin.Context) {
+	var roles []models.Role
+	models.DB.Preload("Permissions").Find(&roles)
+	c.JSON(http.StatusOK, roles)
+}
+
+func CreateRole(c *gin.Context) {
+	var role models.Role
+	err := c.ShouldBindJSON(&role)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "解析JSON失败"})
+		return
+	}
+	models.DB.Create(&role)
+	c.JSON(http.StatusOK, role)
+}
+
+func DeleteRole(c *gin.Context) {
+	id := c.Param("id")
+	models.DB.Where("id = ?", id).Delete(&models.Role{})
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+
+// 分配权限给角色 (POST /api/v1/roles/:id/perms)
+func AssignPermsToRole(c *gin.Context) {
+	roleId := c.Param("id")
+	var req AssignPermRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "解析JSON失败"})
+		return
+	}
+	var role models.Role
+	if err := models.DB.First(&role, roleId).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "找不到该角色"})
+		return
+	}
+
+	var perms []models.Permission
+	models.DB.Where("id IN ?", req.PermIDs).Find(&perms)
+
+	// 把找出来的权限，分配给这个角色
+	models.DB.Model(&role).Association("Permissions").Replace(perms)
+
+	c.JSON(http.StatusOK, gin.H{"message": "权限分配成功！"})
+}
+</file>
+
+<file path="controllers/user.go">
+package controllers
+
+import (
+	"net/http"
+	"rbac-backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+type AssignRoleRequest struct {
+	RoleIDs []uint `json:"role_ids"`
+}
+
+// 获取所有用户 (GET /api/v1/users)
+func GetUsers(c *gin.Context) {
+	var users []models.User
+	models.DB.Preload("Roles").Find(&users)
+	c.JSON(http.StatusOK, users)
+}
+
+// 创建新用户 (POST /api/v1/users)
+func CreateUser(c *gin.Context) {
+	var user models.User
+	err := c.ShouldBindJSON(&user)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "解析JSON失败"})
+		return
+	}
+	models.DB.Create(&user)
+	c.JSON(http.StatusOK, user)
+}
+
+// 删除用户 (DELETE /api/v1/users/:id)
+func DeleteUser(c *gin.Context) {
+	id := c.Param("id")
+	models.DB.Where("id = ?", id).Delete(&models.User{})
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+
+// 分配角色给用户 (POST /api/v1/users/:id/roles)
+func AssignRolesToUser(c *gin.Context) {
+	userId := c.Param("id")
+	var req AssignRoleRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "解析JSON失败"})
+		return
+	}
+	// 查找用户
+	var user models.User
+	if err := models.DB.First(&user, userId).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "找不到该用户"})
+		return
+	}
+	// 把前端传过来的 ID 数组，去查出对应的角色实体
+	var roles []models.Role
+	models.DB.Where("id in ?", req.RoleIDs).Find(&roles)
+	// 把找出来的 roles 数组，强行替换给这个用户的 Roles 属性
+	models.DB.Model(&user).Association("Roles").Replace(roles)
+	c.JSON(http.StatusOK, gin.H{"message": "角色分配成功！"})
+}
+</file>
+
+<file path="go.mod">
+module rbac-backend
+
+go 1.26.2
+
+require (
+	github.com/gin-gonic/gin v1.12.0
+	github.com/google/uuid v1.6.0
+	github.com/redis/go-redis/v9 v9.19.0
+	gorm.io/driver/mysql v1.6.0
+	gorm.io/gorm v1.31.1
+)
+
+require (
+	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/bytedance/gopkg v0.1.3 // indirect
+	github.com/bytedance/sonic v1.15.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/cloudwego/base64x v0.1.6 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
+	github.com/gin-contrib/sse v1.1.0 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/go-sql-driver/mysql v1.8.1 // indirect
+	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
+	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/ugorji/go/codec v1.3.1 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+	golang.org/x/arch v0.22.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
+)
+</file>
+
+<file path="main.go">
+package main
+
+import (
+	"fmt"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"rbac-backend/models"
+	"rbac-backend/router"
+)
+
+func main() {
+	// 连接Redis
+	models.RDB = redis.NewClient(&redis.Options{
+		Addr:     "127.0.0.1:6379",
+		Password: "123456",
+		DB:       0,
+	})
+	fmt.Println("连接 Redis 成功")
+
+	// 连接数据库
+	dsn := "root:123456@tcp(127.0.0.1:3306)/rbac_db?charset=utf8mb4&parseTime=True&loc=Local"
+	var err error
+	models.DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("连接数据库成功")
+
+	// 建表
+	err = models.DB.AutoMigrate(&models.User{}, &models.Role{}, &models.Permission{})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("数据库表结构同步完成")
+
+	{
+		// 创世种子脚本
+		var count int64
+		models.DB.Model(&models.User{}).Count(&count)
+		if count == 0 {
+			fmt.Println("检测到空数据库为空，正在植入电商业务预设数据...")
+			
+			perms := []models.Permission{
+				{Name: "查看数据看板", Path: "/api/v1/dashboard", Method: "GET"},
+				{Name: "查看商品列表", Path: "/api/v1/products", Method: "GET"},
+				{Name: "上架新商品", Path: "/api/v1/products", Method: "POST"},
+				{Name: "强制下架商品", Path: "/api/v1/products/:id", Method: "DELETE"},
+				{Name: "查看全球订单", Path: "/api/v1/orders", Method: "GET"},
+				{Name: "变更订单状态", Path: "/api/v1/orders/:id", Method: "PUT"},
+				{Name: "查看财务报表", Path: "/api/v1/finance", Method: "GET"},
+				{Name: "审批退款打款", Path: "/api/v1/refunds", Method: "POST"},
+				{Name: "分配员工岗位", Path: "/api/v1/users/:id/roles", Method: "POST"},
+				{Name: "调整岗位权限", Path: "/api/v1/roles/:id/perms", Method: "POST"},
+			}
+			models.DB.Create(&perms)
+
+			roles := []models.Role{
+				{Name: "超级管理员", Description: "电商平台总架构，拥有所有权限"},
+				{Name: "商品运营总监", Description: "负责商品上下架管理，无权碰订单和财务"},
+				{Name: "一线客服专员", Description: "负责查看订单和发货，无权碰商品"},
+				{Name: "财务审计员", Description: "负责报表和退款审核"},
+			}
+			models.DB.Create(&roles) 
+
+			models.DB.Model(&roles[0]).Association("Permissions").Append(perms) 
+			models.DB.Model(&roles[1]).Association("Permissions").Append([]models.Permission{perms[0], perms[1], perms[2], perms[3]})
+			models.DB.Model(&roles[2]).Association("Permissions").Append([]models.Permission{perms[0], perms[4], perms[5]})
+			models.DB.Model(&roles[3]).Association("Permissions").Append([]models.Permission{perms[0], perms[6], perms[7]})
+
+			users := []models.User{
+				{Name: "Admin_Root", Password: "admin"},
+				{Name: "Ops_Alice", Password: "123"},
+				{Name: "CS_Bob", Password: "123"},
+				{Name: "Finance_Charlie", Password: "123"},
+			}
+			models.DB.Create(&users)
+
+			models.DB.Model(&users[0]).Association("Roles").Append([]models.Role{roles[0]})
+			models.DB.Model(&users[1]).Association("Roles").Append([]models.Role{roles[1]})
+			models.DB.Model(&users[2]).Association("Roles").Append([]models.Role{roles[2]})
+			models.DB.Model(&users[3]).Association("Roles").Append([]models.Role{roles[3]})
+
+			fmt.Println("4位电商员工账号创建完成！")
+		}
+	}
+
+	// 初始化路由并启动服务
+	r := router.SetupRouter()
+	err = r.Run(":8080")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("RBAC 后端服务器启动在 http://127.0.0.1:8080")
+}
+</file>
+
+<file path="middleware/auth.go">
+package middleware
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"rbac-backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+var ctx = context.Background()
+
+func RBACGuard() gin.HandlerFunc{
+	return func(c *gin.Context) {
+		// 1. 查身份：从 Header 里找 Authorization (前端传 Token)
+		token:= c.GetHeader("Authorization")
+		if token == ""{
+			c.AbortWithStatusJSON(http.StatusUnauthorized,gin.H{"error":"未登录或缺少 Token"})
+			return 
+		}
+
+		// 2. 去 Redis 查这个 Token 对应哪个 UserID
+		userId,err:=models.RDB.Get(ctx,token).Result()
+		if err!=nil{
+			c.AbortWithStatusJSON(http.StatusUnauthorized,gin.H{"error":"登录已过期，请重新登录"})
+			return 
+		}
+
+		// 3. 看目的
+		requestPath:=c.FullPath()
+		requestMethod:=c.Request.Method
+		requiredPerm:=requestMethod+":"+requestPath // 比如 "DELETE:/api/v1/users/:id"
+
+		// 4. 去 Redis 的 Set 里查询他有没有权限
+		permKey:=fmt.Sprintf("user_perms:%s",userId)
+		hasPerm,_:=models.RDB.SIsMember(ctx,permKey,requiredPerm).Result()
+
+		if hasPerm{
+			c.Next()
+		} else {
+			c.AbortWithStatusJSON(http.StatusForbidden,gin.H{
+				"error":"没有 ["+requiredPerm+"] 的权限",
+			})
+			return 
+		}
+	}
+}
+</file>
+
+<file path="models/models.go">
+package models
+
+import (
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
+)
+
+var DB *gorm.DB
+var RDB *redis.Client
+
+type User struct {
+	gorm.Model
+	Name     string `json:"name"`
+	Password string `json:"password"`
+	Roles    []Role `gorm:"many2many:user_roles;" json:"roles"`
+}
+type Role struct {
+	gorm.Model
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Permissions []Permission `gorm:"many2many:role_permissions;" json:"permissions"`
+}
+type Permission struct {
+	gorm.Model
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Method string `json:"method"`
+}
+</file>
+
+<file path="router/router.go">
+package router
+
+import (
+	"github.com/gin-gonic/gin"
+	"rbac-backend/controllers"
+	"rbac-backend/middleware"
+)
+
+// Cors 跨域中间件：允许前端网页跨端口访问 Go 接口
+func Cors() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
+
+		// 处理预检请求
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
+}
+
+// SetupRouter 初始化路由配置
+func SetupRouter() *gin.Engine {
+	r := gin.Default()
+	r.Use(Cors())
+	r.POST("api/v1/login", controllers.Login) // 登录路由
+	v1 := r.Group("/api/v1")
+	v1.Use(middleware.RBACGuard())
+	{
+		{// 电商业务空壳接口
+		v1.GET("/dashboard", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "成功访问数据看板，今日营业额 $10000"}) })
+		
+		v1.GET("/products", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "成功获取商品列表：1.无人机 2.机械键盘"}) })
+		v1.POST("/products", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "新商品上架成功！"}) })
+		v1.DELETE("/products/:id", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "强制下架违规商品成功！"}) })
+		
+		v1.GET("/orders", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "成功获取订单列表：待发货 50 单"}) })
+		v1.PUT("/orders/:id", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "订单状态变更为：已发货"}) })
+		
+		v1.GET("/finance", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "成功获取财务报表：利润率 35%"}) })
+		v1.POST("/refunds", func(c *gin.Context) { c.JSON(200, gin.H{"msg": "财务退款打款成功，资金已原路退回！"}) })
+		}
+
+		// Users 路由
+		v1.GET("/users", controllers.GetUsers)
+		v1.POST("/users", controllers.CreateUser)
+		v1.DELETE("/users/:id", controllers.DeleteUser)
+
+		// Roles 路由
+		v1.GET("/roles", controllers.GetRoles)
+		v1.POST("/roles", controllers.CreateRole)
+		v1.DELETE("/roles/:id", controllers.DeleteRole)
+
+		// Permissions 路由
+		v1.GET("/perms", controllers.GetPermissions)
+		v1.POST("/perms", controllers.CreatePermission)
+		v1.DELETE("/perms/:id", controllers.DeletePermission)
+
+		// 核心关系绑定路由
+		v1.POST("/users/:id/roles", controllers.AssignRolesToUser)
+		v1.POST("/roles/:id/perms", controllers.AssignPermsToRole)
+	}
+	return r
+}
+</file>
+
+</files>
